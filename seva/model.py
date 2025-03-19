@@ -180,6 +180,8 @@ class Seva(nn.Module):
         y: torch.Tensor,
         dense_y: torch.Tensor,
         num_frames: int | None = None,
+        mask: torch.Tensor | None = None,
+        x0: torch.Tensor | None = None,
     ) -> torch.Tensor:
         num_frames = num_frames or self.params.num_frames
         t_emb = timestep_embedding(t, self.model_channels)
@@ -213,6 +215,8 @@ class Seva(nn.Module):
                 num_frames=num_frames,
             )
         h = h.type(x.dtype)
+        if mask is not None and x0 is not None:
+            h = h * (1 - mask) + x0 * mask
         return self.out(h)
 
 
@@ -230,5 +234,7 @@ class SGMWrapper(nn.Module):
             t=t,
             y=c["crossattn"],
             dense_y=c["dense_vector"],
+            mask=c.get("mask", None),
+            x0=c.get("x0", None),
             **kwargs,
         )

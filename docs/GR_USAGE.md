@@ -54,6 +54,22 @@ Notes:
 - For a 134 frame video at `576x576` resolution, it takes around 16 seconds for the first pass generation, and around 4 minutes for the second pass generation, tested with a single H100 GPU.
 - Please expect around ~2-3x more times on HF space.
 
+### Inpainting
+
+The inpainting feature allows you to fill in missing or corrupted parts of a video using corresponding trajectories and masks for each frame. This feature is useful for tasks such as video restoration and editing.
+
+To use the inpainting feature, follow these steps:
+
+1. Prepare your input video, trajectory, and masks for each frame.
+2. Run the `demo.py` script with the appropriate arguments to enable inpainting.
+3. The script will process the input video and generate the inpainted output.
+
+Example command:
+
+```bash
+python demo.py --data_path <data_path> --inpainting --trajectory <trajectory_path> --masks <masks_path>
+```
+
 ### Pro tips
 
 - If the first pass sampling result is bad, click "Abort rendering" button in GUI to avoid stucking at second pass sampling such that you can try something else.
