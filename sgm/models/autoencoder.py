@@ -525,6 +525,63 @@ class AutoencoderKL(AutoencodingEngineLegacy):
             **kwargs,
         )
 
+class SevaAutoencoderKL(AutoencodingEngineLegacy):
+    def __init__(self, **kwargs):
+        if "lossconfig" in kwargs:
+            kwargs["loss_config"] = kwargs.pop("lossconfig")
+        super().__init__(
+            regularizer_config={
+                "target": (
+                    "sgm.modules.autoencoding.regularizers"
+                    ".DiagonalGaussianRegularizer"
+                )
+            },
+            **kwargs,
+        )
+    def encode(
+        self, x: torch.Tensor, return_reg_log: bool = False
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, dict]]:
+        batch_size, num_frames, num_channels, height, width = x.shape
+        x = rearrange(x, "b f c h w -> (b f) c h w")
+        if self.max_batch_size is None:
+            z = self.encoder(x)
+            z = self.quant_conv(z)
+        else:
+            N = x.shape[0]
+            bs = self.max_batch_size
+            n_batches = int(math.ceil(N / bs))
+            z = list()
+            for i_batch in range(n_batches):
+                z_batch = self.encoder(x[i_batch * bs : (i_batch + 1) * bs])
+                z_batch = self.quant_conv(z_batch)
+                z.append(z_batch)
+            z = torch.cat(z, 0)
+
+        z, reg_log = self.regularization(z)
+        z = rearrange(z, "(b f) c h w -> b f c h w", b=batch_size, s=num_frames)
+        if return_reg_log:
+            return z, reg_log
+        return z
+
+    def decode(self, z: torch.Tensor, **decoder_kwargs) -> torch.Tensor:
+        batch_size, num_frames, num_channels, height, width = z.shape
+        z = rearrange(z, "b s c h w -> (b s) c h w", b=batch_size, s=num_frames)
+
+        if self.max_batch_size is None:
+            dec = self.post_quant_conv(z)
+            dec = self.decoder(dec, **decoder_kwargs)
+        else:
+            N = z.shape[0]
+            bs = self.max_batch_size
+            n_batches = int(math.ceil(N / bs))
+            dec = list()
+            for i_batch in range(n_batches):
+                dec_batch = self.post_quant_conv(z[i_batch * bs : (i_batch + 1) * bs])
+                dec_batch = self.decoder(dec_batch, **decoder_kwargs)
+                dec.append(dec_batch)
+            dec = torch.cat(dec, 0)
+        dec = rearrange(dec, "(b s) c h w -> b s c h w", b=batch_size, s=num_frames)
+        return dec
 
 class AutoencoderLegacyVQ(AutoencodingEngineLegacy):
     def __init__(
