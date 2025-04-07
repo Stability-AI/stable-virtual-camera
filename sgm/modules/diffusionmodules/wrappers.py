@@ -43,3 +43,16 @@ class OpenAIWrapper(IdentityWrapper):
                 y=c.get("vector", None),
                 **kwargs,
             )
+
+class SevaWrapper(IdentityWrapper):
+    def forward(
+        self, x: torch.Tensor, t: torch.Tensor, c: dict, **kwargs
+    ) -> torch.Tensor:
+        x = torch.cat((x, c.get("concat", torch.Tensor([]).type_as(x))), dim=1)
+        return self.diffusion_model(
+            x,
+            t=t,
+            y=c["crossattn"],
+            dense_y=c["dense_vector"],
+            **kwargs,
+        )
