@@ -253,7 +253,6 @@ class DL3DVDataset(Dataset):
             "plucker": pluckers,
             "camera_mask": camera_mask,
             "concat": concat,
-            "input_frames": frames[input_frames_mask],
         }
 
         return output_dict
