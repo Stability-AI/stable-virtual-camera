@@ -48,7 +48,6 @@ class AbstractAutoencoder(pl.LightningModule):
             self.automatic_optimization = False
 
     def apply_ckpt(self, ckpt: Union[None, str, dict]):
-        print("CHECKPOINT HERE", ckpt)
         if ckpt is None:
             return
         if ckpt.endswith("ckpt"):
@@ -558,14 +557,14 @@ class SevaAutoencoderKL(AutoencodingEngineLegacy):
             z = torch.cat(z, 0)
 
         z, reg_log = self.regularization(z)
-        z = rearrange(z, "(b f) c h w -> b f c h w", b=batch_size, s=num_frames)
+        z = rearrange(z, "(b f) c h w -> b f c h w", b=batch_size, f=num_frames)
         if return_reg_log:
             return z, reg_log
         return z
 
     def decode(self, z: torch.Tensor, **decoder_kwargs) -> torch.Tensor:
         batch_size, num_frames, num_channels, height, width = z.shape
-        z = rearrange(z, "b s c h w -> (b s) c h w", b=batch_size, s=num_frames)
+        z = rearrange(z, "b f c h w -> (b f) c h w", b=batch_size, f=num_frames)
 
         if self.max_batch_size is None:
             dec = self.post_quant_conv(z)
