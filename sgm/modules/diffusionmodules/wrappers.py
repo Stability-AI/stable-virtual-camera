@@ -48,11 +48,14 @@ class SevaWrapper(IdentityWrapper):
     def forward(
         self, x: torch.Tensor, t: torch.Tensor, c: dict, **kwargs
     ) -> torch.Tensor:
-        x = torch.cat((x, c.get("concat", torch.Tensor([]).type_as(x))), dim=1)
+        x = torch.cat((x, c.get("concat", torch.Tensor([]).type_as(x))), dim=2)
+
+        #TODO: remove
+        c["crossattn"] = torch.zeros((x.shape[0], 1, 1024)).type_as(x).to(x.device)
         return self.diffusion_model(
             x,
             t=t,
             y=c["crossattn"],
-            dense_y=c["dense_vector"],
+            dense_y=c["plucker"],
             **kwargs,
         )

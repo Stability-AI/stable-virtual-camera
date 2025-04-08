@@ -4,7 +4,9 @@ model:
   params:
     scale_factor: 0.18215
     disable_first_stage_autocast: True
-    input_key: cond_frames
+    input_key: clean_latent
+    network_wrapper: sgm.modules.diffusionmodules.wrappers.SevaWrapper
+
 
     scheduler_config:
       target: sgm.lr_scheduler.LambdaLinearScheduler
@@ -49,22 +51,45 @@ model:
         emb_models:
           - is_trainable: False
             ucg_rate: 0.1
-            input_key: original_size_as_tuple
-            target: sgm.modules.encoders.modules.ConcatTimestepEmbedderND
-            params:
-              outdim: 256
+            input_key: plucker
+            target: sgm.modules.encoders.modules.IdentityEncoder
 
           - is_trainable: False
-            input_key: crop_coords_top_left
             ucg_rate: 0.1
-            target: sgm.modules.encoders.modules.ConcatTimestepEmbedderND
-            params:
-              outdim: 256
+            input_key: concat
+            target: sgm.modules.encoders.modules.IdentityEncoder
+
+          - is_trainable: False
+            ucg_rate: 0.1
+            input_key: mask
+            target: sgm.modules.encoders.modules.IdentityEncoder
+
+          # - is_trainable: False
+          #   ucg_rate: 0.1
+          #   input_key: input_frames
+          #   target: sgm.modules.encoders.modules.SevaFrozenOpenCLIPImageEmbedder
+          #   params:
+          #     max_crops: 2 # same as num_images in the dataloader
+
+
+          # - is_trainable: False
+          #   ucg_rate: 0.1
+          #   input_key: original_size_as_tuple
+          #   target: sgm.modules.encoders.modules.ConcatTimestepEmbedderND
+          #   params:
+          #     outdim: 256
+
+          # - is_trainable: False
+          #   input_key: crop_coords_top_left
+          #   ucg_rate: 0.1
+          #   target: sgm.modules.encoders.modules.ConcatTimestepEmbedderND
+          #   params:
+          #     outdim: 256
 
     first_stage_config:
-      target: sgm.models.autoencoder.AutoencoderKL
+      target: sgm.models.autoencoder.SevaAutoencoderKL
       params:
-        ckpt_path: you/path/huggingface/hub/models--stabilityai--stable-diffusion-2-1-base/snapshots/5ede9e4bf3e3fd1cb0ef2f7a3fff13ee514fdf06/vae/diffusion_pytorch_model.safetensors
+        input_key: clean_latent
         embed_dim: 4
         monitor: val/rec_loss
         ddconfig:

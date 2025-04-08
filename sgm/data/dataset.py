@@ -187,7 +187,7 @@ class DL3DVDataset(Dataset):
             img_path = os.path.join(images_dir, img_file)
             image = cv.imread(img_path)
             image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-            image = cv.resize(image, self.target_shape, interpolation=cv.INTER_LINEAR) # TODO: Crops?
+            # image = cv.resize(image, self.target_shape, interpolation=cv.INTER_LINEAR) # TODO: Crops?
             if self.transform:
                 frames[i] = image
 
@@ -225,28 +225,38 @@ class DL3DVDataset(Dataset):
 
         camera_mask = torch.ones(self.num_images, dtype=bool)
 
-        # Separate input and target frames
-        cond_frames_without_noise = frames[input_frames_indices]
-        cond_frames = frames[target_frames_indices]
-
         w2cs = torch.linalg.inv(c2ws)
-        plucker = get_plucker_coordinates(
+        pluckers = get_plucker_coordinates(
             extrinsics_src=w2cs[0],
             extrinsics=w2cs,
             intrinsics=Ks.clone(),
-            target_size=(self.target_shape[0] // self.donwsample_factor, 
-                         self.target_shape[1] // self.donwsample_factor),
+            target_size=(self.image_shape[0] // self.donwsample_factor, 
+                         self.image_shape[1] // self.donwsample_factor),
+        )
+
+        concat = torch.cat(
+            [
+                repeat(
+                    input_frames_mask,
+                    "n -> n 1 h w",
+                    h=pluckers.shape[2],
+                    w=pluckers.shape[3],
+                ),
+                pluckers,
+            ],
+            1,
         )
 
         output_dict = {
             "clean_latent": frames,
             "mask": input_frames_mask,
-            "plucker": plucker,
+            "plucker": pluckers,
             "camera_mask": camera_mask,
+            "concat": concat,
+            "input_frames": frames[input_frames_mask],
         }
 
         return output_dict
-
 
 
 class DL3DVDataModuleFromConfig(LightningDataModule):

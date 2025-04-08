@@ -69,7 +69,7 @@ class AbstractEmbModel(nn.Module):
 
 
 class GeneralConditioner(nn.Module):
-    OUTPUT_DIM2KEYS = {2: "vector", 3: "crossattn", 4: "concat"} # , 5: "concat"}
+    OUTPUT_DIM2KEYS = {2: "vector", 3: "crossattn", 4: "concat", 5: "concat"}
     KEY2CATDIM = {"vector": 1, "crossattn": 2, "concat": 1, "cond_view": 1, "cond_motion": 1}
 
     def __init__(self, emb_models: Union[List, ListConfig]):
@@ -138,7 +138,7 @@ class GeneralConditioner(nn.Module):
             if not isinstance(emb_out, (list, tuple)):
                 emb_out = [emb_out]
             for emb in emb_out:
-                if embedder.input_key in ["cond_view", "cond_motion"]:
+                if embedder.input_key in ["cond_view", "cond_motion", "plucker", "mask"]:
                     out_key = embedder.input_key
                 else:
                     out_key = self.OUTPUT_DIM2KEYS[emb.dim()]
