@@ -12,6 +12,7 @@ import cv2 as cv
 import numpy as np
 
 
+from seva.geometry import get_plucker_coordinates
 from sgm.data.read_write_model import read_model
 from sgm.data.utils_camera import (
     read_intrinsics_colmap,
@@ -23,7 +24,6 @@ from sgm.data.utils_camera import (
     nerfstudio_to_colmap
 )
 from einops import rearrange, repeat 
-
 import webdataset as wds
 from torch.utils.data import DataLoader
 
@@ -102,40 +102,32 @@ class StableDataModuleFromConfig(LightningDataModule):
         return create_loader(self.test_datapipeline, **self.test_config.loader)
 
 
+def center_cameras(c2ws):
+    camera_dist_2med = torch.norm(
+        c2ws[:, :3, 3] - c2ws[:, :3, 3].median(0, keepdim=True).values,
+        dim=-1,
+    )
+    valid_mask = camera_dist_2med <= torch.clamp(
+        torch.quantile(camera_dist_2med, 0.97) * 10,
+        max=1e6,
+    )
+    c2ws[:, :3, 3] -= c2ws[valid_mask, :3, 3].mean(0, keepdim=True)
+    return c2ws
+    
+
 def scale_cameras(c2ws, camera_scale=2.0):
-    """
-    Scales the camera-to-world matrices such that the first camera's distance is normalized.
-
-    Parameters:
-        c2ws (np.ndarray): Batch of camera-to-world matrices of shape (N, 4, 4).
-        camera_scale (float): Target scale for the first camera's distance. Default is 2.0.
-
-    Returns:
-        np.ndarray: Scaled camera-to-world matrices.
-    """
-    camera_dists = c2ws[:, :3, 3]
-    first_camera_dist = np.linalg.norm(camera_dists[0])
+    # camera normalization
+    camera_dists = c2ws[:, :3, 3].clone()
     translation_scaling_factor = (
-        camera_scale if np.isclose(first_camera_dist, 0.0, atol=1e-5)
-        else (camera_scale / first_camera_dist)
+        camera_scale
+        if torch.isclose(
+            torch.norm(camera_dists[0]),
+            torch.zeros(1),
+            atol=1e-5,
+        ).any()
+        else (camera_scale / torch.norm(camera_dists[0]))
     )
     c2ws[:, :3, 3] *= translation_scaling_factor
-    return c2ws
-
-
-def normalize_first_to_identity(c2ws):
-    """
-    Normalize c2ws such that the first camera-to-world matrix becomes the identity matrix.
-
-    Parameters:
-        c2ws (np.ndarray): Batch of camera-to-world matrices of shape (N, 4, 4).
-
-    Returns:
-        np.ndarray: Updated c2ws with the first matrix as the identity.
-    """
-    first_c2w = c2ws[0]
-    inv_first_c2w = np.linalg.inv(first_c2w)  # Invert the first matrix
-    c2ws = np.einsum('ij,njk->nik', inv_first_c2w, c2ws)  # Apply the transformation
     return c2ws
 
 
@@ -151,6 +143,10 @@ class DL3DVDataset(Dataset):
 
         if "480P" in dataset_dir:
             self.image_shape = (270, 480)
+            self.images_folder = "images_8"
+
+        self.target_shape = (576, 576)
+        self.donwsample_factor = 8
 
     def _load_scenes(self):
         scenes = []
@@ -170,7 +166,7 @@ class DL3DVDataset(Dataset):
 
     def __getitem__(self, idx):
         scene_path = self.scenes[idx]
-        images_dir = os.path.join(scene_path, "images_8")
+        images_dir = os.path.join(scene_path,  self.images_folder)
 
         # Load images
         frames = []
@@ -191,6 +187,7 @@ class DL3DVDataset(Dataset):
             img_path = os.path.join(images_dir, img_file)
             image = cv.imread(img_path)
             image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+            image = cv.resize(image, self.target_shape, interpolation=cv.INTER_LINEAR) # TODO: Crops?
             if self.transform:
                 frames[i] = image
 
@@ -208,25 +205,23 @@ class DL3DVDataset(Dataset):
         
         # Read extrinsics from COLMAP
         c2ws = np.array([read_extrinsics_colmap(image_meta, mode="c2w") for image_id, image_meta in images_metas])
+        c2ws = torch.from_numpy(c2ws).float()
+        c2ws = center_cameras(c2ws)
+        c2ws = scale_cameras(c2ws)
         
         # Read intrinsics from COLMAP
         intrinsics = read_intrinsics_colmap(cameras_metas[1], normalize=True)
         Ks = repeat(intrinsics, 'd1 d2 -> n d1 d2', n=self.num_images)
-
-        # Convert c2ws and Ks to torch tensors
-        c2ws = torch.from_numpy(c2ws).float()
         Ks = torch.from_numpy(Ks).float()
 
-        # TODO: verify and add normalization of cameras
-
         # Sample input and target frames
-        num_input = np.random.randint(1, self.num_images)  # Randomly select number of input frames
-        input_frames_indices = np.random.choice(self.num_images, num_input, replace=False)
+        num_input_frames = np.random.randint(1, self.num_images)  # Randomly select number of input frames
+        input_frames_indices = np.random.choice(self.num_images, num_input_frames, replace=False) # Randomly select the input frames
         target_frames_indices = np.setdiff1d(np.arange(self.num_images), input_frames_indices)
 
         # Create masks
-        cond_frames_mask = torch.zeros(self.num_images, dtype=bool)
-        cond_frames_mask[input_frames_indices] = True
+        input_frames_mask = torch.zeros(self.num_images, dtype=bool)
+        input_frames_mask[input_frames_indices] = True
 
         camera_mask = torch.ones(self.num_images, dtype=bool)
 
@@ -234,18 +229,20 @@ class DL3DVDataset(Dataset):
         cond_frames_without_noise = frames[input_frames_indices]
         cond_frames = frames[target_frames_indices]
 
-        # Add optional noise to input frames
-        # cond_frames = cond_frames_without_noise + 0.0 * np.random.randn(*cond_frames_without_noise.shape).astype(np.float32) TODO: in training code?
-
+        w2cs = torch.linalg.inv(c2ws)
+        plucker = get_plucker_coordinates(
+            extrinsics_src=w2cs[0],
+            extrinsics=w2cs,
+            intrinsics=Ks.clone(),
+            target_size=(self.target_shape[0] // self.donwsample_factor, 
+                         self.target_shape[1] // self.donwsample_factor),
+        )
 
         output_dict = {
-            "cond_frames_without_noise": cond_frames_without_noise,  # Input frames
-            "cond_frames": cond_frames,  # Input frames with optional noise
-            "cond_frames_mask": cond_frames_mask,  # Boolean mask for input frames
-            "c2w": c2ws,  # Camera-to-world matrices
-            "K": Ks,  # Intrinsic matrices
-            "camera_mask": camera_mask,  # Boolean mask for input cameras
-            # "plucker_coordinate": plucker_coordinate,  # Plücker coordinates
+            "clean_latent": frames,
+            "mask": input_frames_mask,
+            "plucker": plucker,
+            "camera_mask": camera_mask,
         }
 
         return output_dict
@@ -270,7 +267,7 @@ class DL3DVDataModuleFromConfig(LightningDataModule):
         self.train_dataset = DL3DVDataset(
             dataset_dir,
             colmap_dir,
-            num_images=8,
+            num_images=21,
         )
 
     def prepare_data(self):
