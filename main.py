@@ -456,20 +456,23 @@ class ImageLogger(Callback):
     @rank_zero_only
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if not self.disabled and (pl_module.global_step > 0 or self.log_first_step):
-            self.log_img(pl_module, batch, batch_idx, split="train")
+            # self.log_img(pl_module, batch, batch_idx, split="train")
+            pass
 
     @rank_zero_only
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
         if self.log_before_first_step and pl_module.global_step == 0:
             print(f"{self.__class__.__name__}: logging before training")
-            self.log_img(pl_module, batch, batch_idx, split="train")
+            # self.log_img(pl_module, batch, batch_idx, split="train")
+            pass
 
     @rank_zero_only
     def on_validation_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, *args, **kwargs
     ):
         if not self.disabled and pl_module.global_step > 0:
-            self.log_img(pl_module, batch, batch_idx, split="val")
+            # self.log_img(pl_module, batch, batch_idx, split="val")
+            pass
         if hasattr(pl_module, "calibrate_grad_norm"):
             if (
                 pl_module.calibrate_grad_norm and batch_idx % 25 == 0
@@ -831,8 +834,6 @@ if __name__ == "__main__":
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
         # calling these ourselves should not be necessary but it is.
         # lightning still takes care of proper multiprocessing though
-        print("DATAAAAAAA", data)
-        print("-"*100)
         data.prepare_data()
         # data.setup()
         print("#### Data #####")

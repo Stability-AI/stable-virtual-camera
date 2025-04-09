@@ -35,7 +35,7 @@ class Denoiser(nn.Module):
         c_noise = self.possibly_quantize_c_noise(c_noise.reshape(sigma_shape))
         
         if "mask" in cond:
-            mask = cond.pop("mask")[...,None,None,None]
+            mask = cond.pop("mask")[...,None,None,None].to(dtype=input.dtype)
             input = input * (1 - mask) + input * mask
             
         return (

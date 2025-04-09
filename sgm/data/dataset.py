@@ -182,19 +182,19 @@ class DL3DVDataset(Dataset):
 
         images_files = [images_files[i] for i in images_idxs]
             
-        frames = np.zeros((self.num_images, self.image_shape[0],  self.image_shape[1], 3))
+        frames = np.zeros((self.num_images, self.target_shape[0],  self.target_shape[1], 3))
         for i, img_file in enumerate(images_files):
             img_path = os.path.join(images_dir, img_file)
             image = cv.imread(img_path)
             image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-            # image = cv.resize(image, self.target_shape, interpolation=cv.INTER_LINEAR) # TODO: Crops?
+            image = cv.resize(image, self.target_shape, interpolation=cv.INTER_LINEAR) # TODO: Crops?
             if self.transform:
                 frames[i] = image
 
         frames = frames.astype(np.float32) / 255.0
         frames = torch.from_numpy(frames).permute(0, 3, 1, 2)  # Convert to (N, C, H, W)
         frames = frames * 2.0 - 1.0  # Normalize to [-1, 1]
-        # TODO: reisze to target shape
+
 
         # Load colmap data
         colmap_scene_path = os.path.join(
@@ -230,8 +230,8 @@ class DL3DVDataset(Dataset):
             extrinsics_src=w2cs[0],
             extrinsics=w2cs,
             intrinsics=Ks.clone(),
-            target_size=(self.image_shape[0] // self.donwsample_factor, 
-                         self.image_shape[1] // self.donwsample_factor),
+            target_size=(self.target_shape[0] // self.donwsample_factor, 
+                         self.target_shape[1] // self.donwsample_factor),
         )
 
         concat = torch.cat(
@@ -265,6 +265,7 @@ class DL3DVDataModuleFromConfig(LightningDataModule):
             colmap_dir, 
             batch_size, 
             num_workers=0, 
+            num_images=21,
             shuffle=True):
         super().__init__()
 
@@ -276,7 +277,7 @@ class DL3DVDataModuleFromConfig(LightningDataModule):
         self.train_dataset = DL3DVDataset(
             dataset_dir,
             colmap_dir,
-            num_images=21,
+            num_images=num_images,
         )
 
     def prepare_data(self):
