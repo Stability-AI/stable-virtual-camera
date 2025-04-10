@@ -86,7 +86,7 @@ class StandardDiffusionLoss(nn.Module):
         model_output = denoiser(
             network, noised_input, sigmas, cond, **additional_model_inputs
         )
-        w = append_dims(self.loss_weighting(sigmas), input.ndim)
+        w = append_dims(self.loss_weighting(sigmas, cond["mask"]), input.ndim)
         return self.get_loss(model_output, input, w)
 
     def get_loss(self, model_output, target, w):
@@ -103,3 +103,19 @@ class StandardDiffusionLoss(nn.Module):
             return loss
         else:
             raise NotImplementedError(f"Unknown loss type {self.loss_type}")
+
+def interpolate_weights_batch(bools: torch.Tensor, max_weight=5.0) -> torch.Tensor:
+    B, N = bools.shape
+    indices = torch.arange(N, device=bools.device).unsqueeze(0).expand(B, N)
+    weights = torch.full((B, N), max_weight, dtype=torch.float, device=bools.device)
+    
+    for b in range(B):
+        true_idx = indices[b][bools[b]]
+        if len(true_idx) > 0:
+            dists = torch.stack([torch.abs(indices[b] - t) for t in true_idx]).min(dim=0).values
+            dists[bools[b]] = 0
+            weights[b] = dists / dists.max() * max_weight
+        else:
+            weights[b] = max_weight
+
+    return weights
