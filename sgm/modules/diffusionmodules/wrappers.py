@@ -57,15 +57,12 @@ class SevaWrapper(IdentityWrapper):
         x = rearrange(x, "b f c h w -> (b f) c h w")
         dense_y=rearrange(c["plucker"], "b f c h w -> (b f) c h w")
 
-        #TODO: remove
-        c = torch.zeros((b, 1, 1024)).type_as(x).to(x.device)
-        c = repeat(c, "b 1 c -> (b f) 1 c", f=f)
         t = repeat(t, "b -> (b f)", f=f)
 
         out = self.diffusion_model(
             x,
             t=t,
-            y=c, # c["crossattn"]
+            y=c["crossattn"],
             dense_y=dense_y,
             num_frames=f,
             **kwargs,
