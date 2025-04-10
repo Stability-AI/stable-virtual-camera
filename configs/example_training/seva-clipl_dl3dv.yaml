@@ -64,12 +64,12 @@ model:
             input_key: mask
             target: sgm.modules.encoders.modules.IdentityEncoder
 
-          # - is_trainable: False
-          #   ucg_rate: 0.1
-          #   input_key: input_frames
-          #   target: sgm.modules.encoders.modules.SevaFrozenOpenCLIPImageEmbedder
-          #   params:
-          #     max_crops: 2 # same as num_images in the dataloader
+          - is_trainable: False # crossattn
+            ucg_rate: 0.1
+            input_keys: ["clean_latent", "mask"]
+            target: sgm.modules.encoders.modules.SevaFrozenOpenCLIPImageEmbedder
+            params:
+              unsqueeze_dim: True
 
 
           # - is_trainable: False

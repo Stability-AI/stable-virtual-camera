@@ -1052,3 +1052,89 @@ class FrozenOpenCLIPImagePredictionEmbedder(AbstractEmbModel):
         vid = repeat(vid, "b t d -> (b s) t d", s=self.n_copies)
 
         return vid
+
+
+class SevaFrozenOpenCLIPImageEmbedder(AbstractEmbModel):
+    """
+    Uses the OpenCLIP vision transformer encoder for images
+    """
+
+    def __init__(
+        self,
+        arch="ViT-H-14",
+        version="laion2b_s32b_b79k",
+        device="cuda",
+        max_length=77,
+        freeze=True,
+        antialias=True,
+        ucg_rate=0.0,
+        unsqueeze_dim=False,
+        init_device=None,
+    ):
+        super().__init__()
+        model, _, _ = open_clip.create_model_and_transforms(
+            arch,
+            device=torch.device(default(init_device, "cpu")),
+            pretrained=version,
+        )
+        del model.transformer
+        self.model = model
+        self.device = device
+        self.max_length = max_length
+        if freeze:
+            self.freeze()
+
+        self.antialias = antialias
+
+        self.register_buffer(
+            "mean", torch.Tensor([0.48145466, 0.4578275, 0.40821073]), persistent=False
+        )
+        self.register_buffer(
+            "std", torch.Tensor([0.26862954, 0.26130258, 0.27577711]), persistent=False
+        )
+        self.ucg_rate = ucg_rate
+        self.stored_batch = None
+
+    def preprocess(self, x):
+        # normalize to [0,1]
+        x = kornia.geometry.resize(
+            x,
+            (224, 224),
+            interpolation="bicubic",
+            align_corners=True,
+            antialias=self.antialias,
+        )
+        x = (x + 1.0) / 2.0
+        # renormalize according to clip
+        x = kornia.enhance.normalize(x, self.mean, self.std)
+        return x
+
+    def freeze(self):
+        self.model = self.model.eval()
+        for param in self.parameters():
+            param.requires_grad = False
+
+    @autocast
+    def forward(self, image, mask, no_dropout=False):
+        batch_size = image.shape[0]
+        z = [self.encode_with_vision_transformer(image[b][mask[b]]).mean(0, keepdim=True) 
+             for b in range(batch_size)]
+        z = torch.cat(z, dim=0)
+        z = z.to(image.dtype)
+        if self.ucg_rate > 0.0 and not no_dropout:
+            z = (
+                torch.bernoulli(
+                    (1.0 - self.ucg_rate) * torch.ones(z.shape[0], device=z.device)
+                )[:, None]
+                * z
+            )
+        z = z[:, None]
+        return z
+
+    def encode_with_vision_transformer(self, img):
+        img = self.preprocess(img)
+        x = self.model.visual(img)
+        return x
+
+    def encode(self, text):
+        return self(text)
