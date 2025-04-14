@@ -50,22 +50,27 @@ model:
       params:
         emb_models:
           - is_trainable: False
-            ucg_rate: 0.1
+            ucg_rate: 0.0
             input_key: plucker
             target: sgm.modules.encoders.modules.IdentityEncoder
 
           - is_trainable: False
-            ucg_rate: 0.1
+            ucg_rate: 0.0
             input_key: concat
             target: sgm.modules.encoders.modules.IdentityEncoder
 
           - is_trainable: False
-            ucg_rate: 0.1
+            ucg_rate: 0.0
             input_key: replace
             target: sgm.modules.encoders.modules.IdentityEncoder
 
+          - is_trainable: False
+            ucg_rate: 0.0
+            input_key: mask
+            target: sgm.modules.encoders.modules.IdentityEncoder
+
           - is_trainable: False # crossattn
-            ucg_rate: 0.1
+            ucg_rate: 0.0
             input_keys: ["frames", "mask"]
             target: sgm.modules.encoders.modules.SevaFrozenOpenCLIPImageEmbedder
             params:
