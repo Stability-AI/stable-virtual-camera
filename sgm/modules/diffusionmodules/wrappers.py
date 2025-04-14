@@ -58,11 +58,13 @@ class SevaWrapper(IdentityWrapper):
         dense_y=rearrange(c["plucker"], "b f c h w -> (b f) c h w")
 
         t = repeat(t, "b -> (b f)", f=f)
+        y = repeat(c["crossattn"], "b 1 c -> (b f) 1 c", f=f)
+
 
         out = self.diffusion_model(
             x,
             t=t,
-            y=c["crossattn"],
+            y=y,
             dense_y=dense_y,
             num_frames=f,
             **kwargs,
