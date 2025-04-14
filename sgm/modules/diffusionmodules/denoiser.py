@@ -35,7 +35,7 @@ class Denoiser(nn.Module):
         c_noise = self.possibly_quantize_c_noise(c_noise.reshape(sigma_shape))
         
         if "replace" in cond:
-            x, mask = cond.pop("replace").split((input.shape[1], 1), dim=1) # replace with clean latent
+            x, mask = cond["replace"].split((input.shape[-3], 1), dim=-3) # replace with clean latent replace with clean latent
             input = input * (1 - mask) + x * mask
             
         return (
