@@ -34,9 +34,9 @@ class Denoiser(nn.Module):
         c_skip, c_out, c_in, c_noise = self.scaling(sigma)
         c_noise = self.possibly_quantize_c_noise(c_noise.reshape(sigma_shape))
         
-        if "mask" in cond:
-            mask = cond["mask"][...,None,None,None].to(dtype=input.dtype)
-            input = input * (1 - mask) + input * mask
+        if "replace" in cond:
+            x, mask = cond.pop("replace").split((input.shape[1], 1), dim=1) # replace with clean latent
+            input = input * (1 - mask) + x * mask
             
         return (
             network(input * c_in, c_noise, cond, **additional_model_inputs) * c_out

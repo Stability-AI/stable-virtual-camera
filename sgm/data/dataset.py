@@ -26,6 +26,7 @@ from sgm.data.utils_camera import (
 from einops import rearrange, repeat 
 import webdataset as wds
 from torch.utils.data import DataLoader
+from torchvision import transforms
 
 # try: TODO: fix torchdata version
 #     from sdata import create_dataset, create_dummy_dataset, create_loader
@@ -102,21 +103,20 @@ class StableDataModuleFromConfig(LightningDataModule):
         return create_loader(self.test_datapipeline, **self.test_config.loader)
 
 
-def center_cameras(c2ws):
+def center_cameras(all_c2ws, c2ws):
+    ref_c2ws = all_c2ws
     camera_dist_2med = torch.norm(
-        c2ws[:, :3, 3] - c2ws[:, :3, 3].median(0, keepdim=True).values,
+        ref_c2ws[:, :3, 3] - ref_c2ws[:, :3, 3].median(0, keepdim=True).values,
         dim=-1,
     )
     valid_mask = camera_dist_2med <= torch.clamp(
         torch.quantile(camera_dist_2med, 0.97) * 10,
         max=1e6,
     )
-    c2ws[:, :3, 3] -= c2ws[valid_mask, :3, 3].mean(0, keepdim=True)
-    return c2ws
+    c2ws[:, :3, 3] -= ref_c2ws[valid_mask, :3, 3].mean(0, keepdim=True)
     
 
 def scale_cameras(c2ws, camera_scale=2.0):
-    # camera normalization
     camera_dists = c2ws[:, :3, 3].clone()
     translation_scaling_factor = (
         camera_scale
@@ -128,13 +128,13 @@ def scale_cameras(c2ws, camera_scale=2.0):
         else (camera_scale / torch.norm(camera_dists[0]))
     )
     c2ws[:, :3, 3] *= translation_scaling_factor
-    return c2ws
 
 
 class DL3DVDataset(Dataset):
-    def __init__(self, dataset_dir, colmap_dir, num_images, transform=None, levels=None):
+    def __init__(self, dataset_dir, colmap_dir, num_images, latents_dir=None, transform=None, levels=None):
         self.dataset_dir = dataset_dir
         self.colmap_dir = colmap_dir
+        self.latents_dir = latents_dir
         self.transform = transform
         self.levels = levels if levels else []
         self.num_images = num_images
@@ -144,9 +144,21 @@ class DL3DVDataset(Dataset):
         if "480P" in dataset_dir:
             self.image_shape = (270, 480)
             self.images_folder = "images_8"
+        elif "960P" in dataset_dir:
+            self.image_shape = (540, 960)
+            self.images_folder = "images_4"
 
         self.target_shape = (576, 576)
+        self.transform = transforms.Compose([
+            transforms.CenterCrop(self.image_shape[0]), # Center crop to square
+            transforms.Resize(self.target_shape),       # Resize to target shape
+            transforms.ToTensor(),                      # Convert to tensor
+            transforms.Normalize([0.5], [0.5])          # Normalize to [-1, 1]
+        ])
+
+        # Values fro SD 2.1 autoencoder
         self.donwsample_factor = 8
+        self.scale_factor = 0.18215
 
     def _load_scenes(self):
         scenes = []
@@ -181,33 +193,38 @@ class DL3DVDataset(Dataset):
             images_idxs = np.random.choice(len(images_files), self.num_images, replace=False)
 
         images_files = [images_files[i] for i in images_idxs]
-            
-        frames = np.zeros((self.num_images, self.target_shape[0],  self.target_shape[1], 3))
+
+        clean_latents = None
+        if self.latents_dir is not None:
+            # Load latents
+            latents_dir = images_dir.replace(self.dataset_dir, self.latents_dir)
+            latents_files = sorted([f for f in os.listdir(latents_dir) if f.endswith(".pt")])
+            latents_files = [latents_files[i] for i in images_idxs]
+            clean_latents = torch.stack([torch.load(os.path.join(latents_dir, latents_files[i])) for i in range(len(latents_files))])
+
+        # Load frames   
+        frames = torch.zeros((self.num_images, 3, self.target_shape[0],  self.target_shape[1]))
         for i, img_file in enumerate(images_files):
             img_path = os.path.join(images_dir, img_file)
-            image = cv.imread(img_path)
-            image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-            image = cv.resize(image, self.target_shape, interpolation=cv.INTER_LINEAR) # TODO: Crops?
-            if self.transform:
-                frames[i] = image
-
-        frames = frames.astype(np.float32) / 255.0
-        frames = torch.from_numpy(frames).permute(0, 3, 1, 2)  # Convert to (N, C, H, W)
-        frames = frames * 2.0 - 1.0  # Normalize to [-1, 1]
-
+            image = Image.open(img_path).convert("RGB")
+            image = self.transform(image)
+            frames[i] = image
 
         # Load colmap data
         colmap_scene_path = os.path.join(
             self.colmap_dir, os.path.relpath(scene_path, self.dataset_dir), "colmap", "sparse", "0"
         )
         cameras_metas, images_metas, _ = read_model(colmap_scene_path)
-        images_metas = list(images_metas.items())[:self.num_images] 
+        
+        # Sort images_metas by the "name" attribute
+        images_metas = list(sorted(images_metas.values(), key=lambda x: x.name))
         
         # Read extrinsics from COLMAP
-        c2ws = np.array([read_extrinsics_colmap(image_meta, mode="c2w") for image_id, image_meta in images_metas])
-        c2ws = torch.from_numpy(c2ws).float()
-        c2ws = center_cameras(c2ws)
-        c2ws = scale_cameras(c2ws)
+        all_c2ws = np.array([read_extrinsics_colmap(image_meta, mode="c2w") for image_meta in images_metas])
+        all_c2ws = torch.from_numpy(all_c2ws).float()
+        c2ws = all_c2ws[images_idxs]
+        center_cameras(all_c2ws, c2ws)
+        scale_cameras(c2ws)
         
         # Read intrinsics from COLMAP
         intrinsics = read_intrinsics_colmap(cameras_metas[1], normalize=True)
@@ -217,24 +234,23 @@ class DL3DVDataset(Dataset):
         # Sample input and target frames
         num_input_frames = np.random.randint(1, self.num_images)  # Randomly select number of input frames
         input_frames_indices = np.random.choice(self.num_images, num_input_frames, replace=False) # Randomly select the input frames
-        target_frames_indices = np.setdiff1d(np.arange(self.num_images), input_frames_indices)
 
         # Create masks
-        input_frames_mask = torch.zeros(self.num_images, dtype=bool)
+        input_frames_mask = torch.zeros(self.num_images, dtype=torch.bool)
         input_frames_mask[input_frames_indices] = True
 
-        camera_mask = torch.ones(self.num_images, dtype=bool)
+        camera_mask = torch.ones(self.num_images, dtype=torch.bool)
 
         w2cs = torch.linalg.inv(c2ws)
         pluckers = get_plucker_coordinates(
-            extrinsics_src=w2cs[0],
+            extrinsics_src=w2cs[input_frames_indices[0]],
             extrinsics=w2cs,
             intrinsics=Ks.clone(),
             target_size=(self.target_shape[0] // self.donwsample_factor, 
                          self.target_shape[1] // self.donwsample_factor),
         )
 
-        concat = torch.cat(
+        concat = torch.cat( # binary mask and plcukers
             [
                 repeat(
                     input_frames_mask,
@@ -244,15 +260,30 @@ class DL3DVDataset(Dataset):
                 ),
                 pluckers,
             ],
-            1,
+            dim=1,
+        )
+
+        replace = torch.cat( # clean latents and binary mask
+            [
+                clean_latents * self.scale_factor,
+                repeat(
+                    input_frames_mask,
+                    "n -> n 1 h w",
+                    h=pluckers.shape[2],
+                    w=pluckers.shape[3],
+                ),
+            ],
+            dim=1,
         )
 
         output_dict = {
-            "clean_latent": frames,
+            "clean_latent": clean_latents,
             "mask": input_frames_mask,
             "plucker": pluckers,
             "camera_mask": camera_mask,
             "concat": concat,
+            "frames": frames,
+            "replace": replace,
         }
 
         return output_dict
@@ -264,6 +295,7 @@ class DL3DVDataModuleFromConfig(LightningDataModule):
             dataset_dir,
             colmap_dir, 
             batch_size, 
+            latents_dir=None,
             num_workers=0, 
             num_images=21,
             shuffle=True):
@@ -271,12 +303,14 @@ class DL3DVDataModuleFromConfig(LightningDataModule):
 
         self.dataset_dir = dataset_dir
         self.colmap_dir = colmap_dir
+        self.latents_dir = latents_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.shuffle = shuffle
         self.train_dataset = DL3DVDataset(
             dataset_dir,
             colmap_dir,
+            latents_dir=latents_dir,
             num_images=num_images,
         )
 

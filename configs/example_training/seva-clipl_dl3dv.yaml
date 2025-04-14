@@ -61,51 +61,18 @@ model:
 
           - is_trainable: False
             ucg_rate: 0.1
-            input_key: mask
+            input_key: replace
             target: sgm.modules.encoders.modules.IdentityEncoder
 
           - is_trainable: False # crossattn
             ucg_rate: 0.1
-            input_keys: ["clean_latent", "mask"]
+            input_keys: ["frames", "mask"]
             target: sgm.modules.encoders.modules.SevaFrozenOpenCLIPImageEmbedder
             params:
               unsqueeze_dim: True
 
-
-          # - is_trainable: False
-          #   ucg_rate: 0.1
-          #   input_key: original_size_as_tuple
-          #   target: sgm.modules.encoders.modules.ConcatTimestepEmbedderND
-          #   params:
-          #     outdim: 256
-
-          # - is_trainable: False
-          #   input_key: crop_coords_top_left
-          #   ucg_rate: 0.1
-          #   target: sgm.modules.encoders.modules.ConcatTimestepEmbedderND
-          #   params:
-          #     outdim: 256
-
     first_stage_config:
-      target: sgm.models.autoencoder.SevaAutoencoderKL
-      params:
-        input_key: clean_latent
-        embed_dim: 4
-        monitor: val/rec_loss
-        ddconfig:
-          attn_type: vanilla-xformers
-          double_z: true
-          z_channels: 4
-          resolution: 256
-          in_channels: 3
-          out_ch: 3
-          ch: 128
-          ch_mult: [1, 2, 4, 4]
-          num_res_blocks: 2
-          attn_resolutions: []
-          dropout: 0.0
-        lossconfig:
-          target: torch.nn.Identity
+      target: sgm.models.autoencoder.IdentityFirstStage
 
     loss_fn_config:
       target: sgm.modules.diffusionmodules.loss.StandardDiffusionLoss
