@@ -1,0 +1,145 @@
+model:
+  base_learning_rate: 1.0e-4
+  target: sgm.models.diffusion.DiffusionEngine
+  params:
+    scale_factor: 0.18215
+    disable_first_stage_autocast: True
+    input_key: clean_latent
+    network_wrapper: sgm.modules.diffusionmodules.wrappers.SevaWrapper
+
+
+    scheduler_config:
+      target: sgm.lr_scheduler.LambdaLinearScheduler
+      params:
+        warm_up_steps: [10000]
+        cycle_lengths: [10000000000000]
+        f_start: [1.e-6]
+        f_max: [1.]
+        f_min: [1.]
+
+    denoiser_config:
+      target: sgm.modules.diffusionmodules.denoiser.DiscreteDenoiser
+      params:
+        num_idx: 1000
+
+        scaling_config:
+          target: sgm.modules.diffusionmodules.denoiser_scaling.EpsScaling
+        discretization_config:
+          target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
+
+    network_config:
+      target: seva.model.Seva
+      params:
+        params:
+          in_channels: 11
+          model_channels: 320
+          out_channels: 4
+          num_frames: 21
+          num_res_blocks: 2
+          attention_resolutions: [4, 2, 1]
+          channel_mult: [1, 2, 4, 4]
+          num_head_channels: 64
+          transformer_depth: [1, 1, 1, 1]
+          context_dim: 1024
+          dense_in_channels: 6
+          dropout: 0.0
+          unflatten_names: ["middle_ds8", "output_ds4", "output_ds2"]
+
+    conditioner_config:
+      target: sgm.modules.GeneralConditioner
+      params:
+        emb_models:
+          - is_trainable: False
+            ucg_rate: 0.0
+            input_key: plucker
+            target: sgm.modules.encoders.modules.IdentityEncoder
+
+          - is_trainable: False
+            ucg_rate: 0.0
+            input_key: concat
+            target: sgm.modules.encoders.modules.IdentityEncoder
+
+          - is_trainable: False
+            ucg_rate: 0.0
+            input_key: replace
+            target: sgm.modules.encoders.modules.IdentityEncoder
+
+          - is_trainable: False
+            ucg_rate: 0.0
+            input_key: mask
+            target: sgm.modules.encoders.modules.IdentityEncoder
+
+          - is_trainable: False # crossattn
+            ucg_rate: 0.0
+            input_keys: ["frames", "mask"]
+            target: sgm.modules.encoders.modules.SevaFrozenOpenCLIPImageEmbedder
+            params:
+              unsqueeze_dim: True
+
+    first_stage_config:
+      target: sgm.models.autoencoder.IdentityFirstStage
+
+    loss_fn_config:
+      target: sgm.modules.diffusionmodules.loss.StandardDiffusionLoss
+      params:
+        loss_weighting_config:
+          target: sgm.modules.diffusionmodules.loss_weighting.SevaWeighting
+        sigma_sampler_config:
+          target: sgm.modules.diffusionmodules.sigma_sampling.DiscreteSampling
+          params:
+            num_idx: 1000
+
+            discretization_config:
+              target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
+
+    sampler_config:
+      target: sgm.modules.diffusionmodules.sampling.EulerEDMSampler
+      params:
+        num_steps: 50
+
+        discretization_config:
+          target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
+
+        guider_config:
+          target: sgm.modules.diffusionmodules.guiders.VanillaCFG
+          params:
+            scale: 7.5
+
+data:
+  target: sgm.data.dataset.DL3DVDataModuleFromConfig
+  params:
+    dataset_dir: you/path/DL3DV-ALL-480P
+    colmap_dir: you/path/DL3DV-ALL-ColmapCache
+    batch_size: 1
+    num_workers: 48
+
+lightning:
+  modelcheckpoint:
+    params:
+      every_n_train_steps: 5000
+
+  callbacks:
+    metrics_over_trainsteps_checkpoint:
+      params:
+        every_n_train_steps: 25000
+
+    image_logger:
+      target: main.ImageLogger
+      params:
+        disabled: False
+        enable_autocast: False
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+        log_first_step: False
+        log_images_kwargs:
+          use_ema_scope: False
+          N: 8
+          n_rows: 2
+
+  trainer:
+    devices: 0,
+    benchmark: True
+    num_sanity_val_steps: 0
+    accumulate_grad_batches: 1
+    max_epochs: 1000
