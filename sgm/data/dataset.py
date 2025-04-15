@@ -187,7 +187,7 @@ class DL3DVDataset(Dataset):
         # Sample frames indices
         if np.random.rand() <= self.adjacent_frame_sampling_prob:
             max_start_idx = max(0, len(images_files) - self.num_images)
-            start_idx = np.random.randint(0, max_start_idx + 1)
+            start_idx = np.random.randint(0, max_start_idx)
             images_idxs = np.arange(start_idx, start_idx + self.num_images)
         else:
             images_idxs = np.random.choice(len(images_files), self.num_images, replace=False)
