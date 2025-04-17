@@ -178,16 +178,21 @@ class DL3DVDataset(Dataset):
 
     def __getitem__(self, idx):
         scene_path = self.scenes[idx]
-        images_dir = os.path.join(scene_path,  self.images_folder)
 
-        # Load images
-        frames = []
-        images_files = sorted([f for f in os.listdir(images_dir) if f.endswith(".png")])
+        # Load colmap data
+        colmap_scene_path = os.path.join(
+            self.colmap_dir, os.path.relpath(scene_path, self.dataset_dir), "colmap", "sparse", "0"
+        )
+        cameras_metas, images_metas, _ = read_model(colmap_scene_path)
+        images_metas = list(sorted(images_metas.values(), key=lambda x: x.name))
+
+        # Load images files
+        images_dir = os.path.join(scene_path, self.images_folder)
+        images_files = [os.path.join(images_dir, image.name) for image in images_metas]
 
         # Sample frames indices
         if np.random.rand() <= self.adjacent_frame_sampling_prob:
-            max_start_idx = max(0, len(images_files) - self.num_images)
-            start_idx = np.random.randint(0, max_start_idx)
+            start_idx = np.random.randint(0, len(images_files) - self.num_images)
             images_idxs = np.arange(start_idx, start_idx + self.num_images)
         else:
             images_idxs = np.random.choice(len(images_files), self.num_images, replace=False)
@@ -209,15 +214,6 @@ class DL3DVDataset(Dataset):
             image = Image.open(img_path).convert("RGB")
             image = self.transform(image)
             frames[i] = image
-
-        # Load colmap data
-        colmap_scene_path = os.path.join(
-            self.colmap_dir, os.path.relpath(scene_path, self.dataset_dir), "colmap", "sparse", "0"
-        )
-        cameras_metas, images_metas, _ = read_model(colmap_scene_path)
-        
-        # Sort images_metas by the "name" attribute
-        images_metas = list(sorted(images_metas.values(), key=lambda x: x.name))
         
         # Read extrinsics from COLMAP
         all_c2ws = np.array([read_extrinsics_colmap(image_meta, mode="c2w") for image_meta in images_metas])
