@@ -31,6 +31,7 @@ class SevaParams(object):
     unflatten_names: list[str] = field(
         default_factory=lambda: ["middle_ds8", "output_ds4", "output_ds2"]
     )
+    ckpt_path: str | None = None
 
     def __post_init__(self):
         assert len(self.channel_mult) == len(self.transformer_depth)
@@ -172,6 +173,12 @@ class Seva(nn.Module):
             nn.SiLU(),
             nn.Conv2d(self.model_channels, params.out_channels, 3, padding=1),
         )
+        if params.ckpt_path is not None:
+            from safetensors.torch import load_file
+            from seva.utils import print_load_warning
+            state_dict = load_file(params.ckpt_path)
+            missing, unexpected = self.load_state_dict(state_dict, strict=False, assign=True)
+            print_load_warning(missing, unexpected)
 
     def forward(
         self,
