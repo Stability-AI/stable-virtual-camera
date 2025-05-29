@@ -13,7 +13,7 @@ dependencies = [
     "tyro",
     "fire",
     "ninja",
-    "gradio==5.17.0",
+    "gradio==5.31.0",
     "einops",
     "colorama",
     "splines",
