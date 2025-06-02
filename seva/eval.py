@@ -1954,9 +1954,9 @@ def run_one_scene(
                 )
             extend_dict(all_samples, samples)
             all_test_inds.extend(chunk_test_inds)
-        all_samples = {
-            key: value[np.argsort(all_test_inds)] for key, value in all_samples.items()
-        }
+    all_samples = {
+        key: value[np.argsort(all_test_inds)] for key, value in all_samples.items()
+    }
     save_output(
         replace_or_include_input_for_dict(
             all_samples,

@@ -27,6 +27,7 @@ def print_load_warning(missing: list[str], unexpected: list[str]) -> None:
 
 
 def load_model(
+    model_version: float = 1.1,
     pretrained_model_name_or_path: str = "stabilityai/stable-virtual-camera",
     weight_name: str = "model.safetensors",
     device: str | torch.device = "cuda",
@@ -35,6 +36,9 @@ def load_model(
     if os.path.isdir(pretrained_model_name_or_path):
         weight_path = os.path.join(pretrained_model_name_or_path, weight_name)
     else:
+        if model_version > 1:
+            base, ext = os.path.splitext(weight_name)
+            weight_name = f"{base}v{model_version}{ext}"
         weight_path = hf_hub_download(
             repo_id=pretrained_model_name_or_path, filename=weight_name
         )

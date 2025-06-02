@@ -853,7 +853,9 @@ def main(server_port: int | None = None, share: bool = True):
                     with gr.Column():
                         with gr.Group():
                             # Initially disable the Preprocess Images button until an image is selected.
-                            preprocess_btn = gr.Button("Preprocess images", interactive=False)
+                            preprocess_btn = gr.Button(
+                                "Preprocess images", interactive=False
+                            )
                             preprocess_progress = gr.Textbox(
                                 label="",
                                 visible=False,
@@ -1059,7 +1061,9 @@ def main(server_port: int | None = None, share: bool = True):
                     with gr.Column():
                         with gr.Group():
                             # Initially disable the Preprocess Images button until images are selected.
-                            preprocess_btn = gr.Button("Preprocess images", interactive=False)
+                            preprocess_btn = gr.Button(
+                                "Preprocess images", interactive=False
+                            )
                             preprocess_progress = gr.Textbox(
                                 label="",
                                 visible=False,
@@ -1120,7 +1124,7 @@ def main(server_port: int | None = None, share: bool = True):
                                     gr.update(visible=False),
                                     gr.update(visible=False),
                                     gr.update(visible=True),
-                                    gr.update(interactive=bool(x))
+                                    gr.update(interactive=bool(x)),
                                 ),
                                 inputs=[example_imgs_expander],
                                 outputs=[
@@ -1129,7 +1133,7 @@ def main(server_port: int | None = None, share: bool = True):
                                     example_imgs_confirmer,
                                     example_imgs_backer,
                                     example_imgs,
-                                    preprocess_btn
+                                    preprocess_btn,
                                 ],
                             )
                             example_imgs_backer.click(

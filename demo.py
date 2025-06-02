@@ -45,22 +45,12 @@ if IS_TORCH_NIGHTLY:
 else:
     COMPILE = False
 
-MODEL = SGMWrapper(load_model(device="cpu", verbose=True).eval()).to(device)
 AE = AutoEncoder(chunk_size=1).to(device)
 CONDITIONER = CLIPConditioner().to(device)
 DISCRETIZATION = DDPMDiscretization()
 DENOISER = DiscreteDenoiser(discretization=DISCRETIZATION, num_idx=1000, device=device)
-VERSION_DICT = {
-    "H": 576,
-    "W": 576,
-    "T": 21,
-    "C": 4,
-    "f": 8,
-    "options": {},
-}
 
 if COMPILE:
-    MODEL = torch.compile(MODEL, dynamic=False)
     CONDITIONER = torch.compile(CONDITIONER, dynamic=False)
     AE = torch.compile(AE, dynamic=False)
 
@@ -274,47 +264,66 @@ def parse_task(
 def main(
     data_path,
     data_items=None,
+    version=1.1,
     task="img2img",
     save_subdir="",
     H=None,
     W=None,
     T=None,
     use_traj_prior=False,
+    pretrained_model_name_or_path="stabilityai/stable-virtual-camera",
+    weight_name="model.safetensors",
     **overwrite_options,
 ):
-    if H is not None:
-        VERSION_DICT["H"] = H
-    if W is not None:
-        VERSION_DICT["W"] = W
-    if T is not None:
-        VERSION_DICT["T"] = [int(t) for t in T.split(",")] if isinstance(T, str) else T
+    MODEL = SGMWrapper(
+        load_model(
+            model_version=version,
+            pretrained_model_name_or_path=pretrained_model_name_or_path,
+            weight_name=weight_name,
+            device="cpu",
+            verbose=True,
+        ).eval()
+    ).to(device)
+
+    if COMPILE:
+        MODEL = torch.compile(MODEL, dynamic=False)
+
+    VERSION_DICT = {
+        "H": H or 576,
+        "W": W or 576,
+        "T": ([int(t) for t in T.split(",")] if isinstance(T, str) else T) or 21,
+        "C": 4,
+        "f": 8,
+        "options": {
+            "chunk_strategy": "nearest-gt",
+            "video_save_fps": 30.0,
+            "beta_linear_start": 5e-6,
+            "log_snr_shift": 2.4,
+            "guider_types": 1,
+            "cfg": 2.0,
+            "camera_scale": 2.0,
+            "num_steps": 50,
+            "cfg_min": 1.2,
+            "encoding_t": 1,
+            "decoding_t": 1,
+            "num_inputs": None,
+            "seed": 23,
+        },
+    }
 
     options = VERSION_DICT["options"]
-    options["chunk_strategy"] = "nearest-gt"
-    options["video_save_fps"] = 30.0
-    options["beta_linear_start"] = 5e-6
-    options["log_snr_shift"] = 2.4
-    options["guider_types"] = 1
-    options["cfg"] = 2.0
-    options["camera_scale"] = 2.0
-    options["num_steps"] = 50
-    options["cfg_min"] = 1.2
-    options["encoding_t"] = 1
-    options["decoding_t"] = 1
-    options["num_inputs"] = None
-    options["seed"] = 23
     options.update(overwrite_options)
-
-    num_inputs = options["num_inputs"]
-    seed = options["seed"]
 
     if data_items is not None:
         if not isinstance(data_items, (list, tuple)):
             data_items = data_items.split(",")
         scenes = [os.path.join(data_path, item) for item in data_items]
     else:
-        scenes = glob.glob(osp.join(data_path, "*"))
+        scenes = [
+            item for item in glob.glob(osp.join(data_path, "*")) if os.path.isfile(item)
+        ]
 
+    num_inputs = options["num_inputs"]
     for scene in tqdm(scenes):
         save_path_scene = os.path.join(
             WORK_DIR, task, save_subdir, os.path.splitext(os.path.basename(scene))[0]
@@ -370,7 +379,7 @@ def main(
             use_traj_prior=use_traj_prior,
             traj_prior_Ks=anchor_Ks,
             traj_prior_c2ws=anchor_c2ws,
-            seed=seed,  # to ensure sampled video can be reproduced in regardless of start and i
+            seed=options["seed"],
         )
         for _ in video_path_generator:
             pass

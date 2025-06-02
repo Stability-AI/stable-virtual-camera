@@ -145,7 +145,7 @@ python demo.py \
 
 - `--num_inputs <P>` is only necessary if there are multiple `train_test_split_*.json` files in the scene folder.
 - Default `cfg` should be set to `3,2` (`3` being `cfg` for the first pass, and `2` being the `cfg` for the second pass). Try to increase the `cfg` for the first pass from `3` to higher values if you observe blurry areas (usually happens for harder scenes with a fair amount of unseen regions).
-- Default chunking strategy should be set to `interp+gt` (instead of `interp`, `interp` can work but usually a bit worse).
+- Default chunking strategy should be set to `interp-gt` (instead of `interp`, `interp` can work but usually a bit worse).
 - The `--chunk_strategy_first_pass` is set as `gt-nearest` by default. So it can automatically adapt when $P$ is large (up to a thousand frames).
 
 ### Semi-dense-view regime ($P>9$)
