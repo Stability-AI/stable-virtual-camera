@@ -29,19 +29,19 @@
 
 # Overview
 
-`Stable Virtual Camera (Seva)` is a generalist diffusion model for Novel View Synthesis (NVS), generating 3D consistent novel views of a scene, given any number of input views and target cameras.
+`Stable Virtual Camera (SEVA)` is a generalist diffusion model for Novel View Synthesis (NVS), generating 3D consistent novel views of a scene, given any number of input views and target cameras.
 
 # :tada: News
 
-- June 2025 - Release `v1.1` model checkpoint.
+- June 2025 - Release v`1.1` model checkpoint.
 - March 2025 - `Stable Virtual Camera` is out everywhere.
 
 # :gear: Versions
 
 | Model Version | \#Parameter | Resolution |                                               Download Link                                                |                                           Update Notes                                           |
 | :-----------: | :---------: | :--------: | :--------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------: |
-|    `v1.1`     |    1.3B     |    576P    | 🤗 [Huggingface](https://huggingface.co/stabilityai/stable-virtual-camera/blob/main/modelv1.1.safetensors) | Fixing known issues of foreground objects sometimes being detached from the background in `v1.0` |
-|    `v1.0`     |    1.3B     |    576P    |   🤗 [Huggingface](https://huggingface.co/stabilityai/stable-virtual-camera/blob/main/model.safetensors)   |                                         Initial release                                          |
+|     `1.1`     |    1.3B     |    576P    | 🤗 [Huggingface](https://huggingface.co/stabilityai/stable-virtual-camera/blob/main/modelv1.1.safetensors) | Fixing known issues of foreground objects sometimes being detached from the background in v`1.0` |
+|     `1.0`     |    1.3B     |    576P    |   🤗 [Huggingface](https://huggingface.co/stabilityai/stable-virtual-camera/blob/main/model.safetensors)   |                                         Initial release                                          |
 
 You can specify the version via, for example, `load_model(..., model_version=1.1)` in the script.
 
