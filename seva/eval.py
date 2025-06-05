@@ -5,8 +5,6 @@ import os
 import re
 import threading
 from typing import List, Literal, Optional, Tuple, Union
-
-import gradio as gr
 from colorama import Fore, Style, init
 
 init(autoreset=True)
@@ -22,6 +20,7 @@ from tqdm.auto import tqdm
 
 from seva.geometry import get_camera_dist, get_plucker_coordinates, to_hom_pose
 from seva.sampling import (
+    Discretization,
     EulerEDMSampler,
     MultiviewCFG,
     MultiviewTemporalCFG,
@@ -1034,64 +1033,9 @@ def create_transforms_simple(save_path, img_paths, img_whs, c2ws, Ks):
         json.dump(out, of, indent=5)
 
 
-class GradioTrackedSampler(EulerEDMSampler):
-    """
-    A thin wrapper around the EulerEDMSampler that allows tracking progress and
-    aborting sampling for gradio demo.
-    """
-
-    def __init__(self, abort_event: threading.Event, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.abort_event = abort_event
-
-    def __call__(  # type: ignore
-        self,
-        denoiser,
-        x: torch.Tensor,
-        scale: float | torch.Tensor,
-        cond: dict,
-        uc: dict | None = None,
-        num_steps: int | None = None,
-        verbose: bool = True,
-        global_pbar: gr.Progress | None = None,
-        **guider_kwargs,
-    ) -> torch.Tensor | None:
-        uc = cond if uc is None else uc
-        x, s_in, sigmas, num_sigmas, cond, uc = self.prepare_sampling_loop(
-            x,
-            cond,
-            uc,
-            num_steps,
-        )
-        for i in self.get_sigma_gen(num_sigmas, verbose=verbose):
-            gamma = (
-                min(self.s_churn / (num_sigmas - 1), 2**0.5 - 1)
-                if self.s_tmin <= sigmas[i] <= self.s_tmax
-                else 0.0
-            )
-            x = self.sampler_step(
-                s_in * sigmas[i],
-                s_in * sigmas[i + 1],
-                denoiser,
-                x,
-                scale,
-                cond,
-                uc,
-                gamma,
-                **guider_kwargs,
-            )
-            # Allow tracking progress in gradio demo.
-            if global_pbar is not None:
-                global_pbar.update()
-            # Allow aborting sampling in gradio demo.
-            if self.abort_event.is_set():
-                return None
-        return x
-
-
 def create_samplers(
     guider_types: int | list[int],
-    discretization,
+    discretization: Discretization,
     num_frames: list[int] | None,
     num_steps: int,
     cfg_min: float = 1.0,
@@ -1111,47 +1055,31 @@ def create_samplers(
             raise ValueError(
                 f"Invalid guider type {guider_type}. Must be one of {list(guider_mapping.keys())}"
             )
-        guider_cls = guider_mapping[guider_type]
         guider_args = ()
         if guider_type > 0:
             guider_args += (cfg_min,)
             if guider_type == 2:
                 assert num_frames is not None
                 guider_args = (num_frames[i], cfg_min)
-        guider = guider_cls(*guider_args)
-
-        if abort_event is not None:
-            sampler = GradioTrackedSampler(
-                abort_event,
-                discretization=discretization,
-                guider=guider,
-                num_steps=num_steps,
-                s_churn=0.0,
-                s_tmin=0.0,
-                s_tmax=999.0,
-                s_noise=1.0,
-                verbose=True,
-                device=device,
-            )
-        else:
-            sampler = EulerEDMSampler(
-                discretization=discretization,
-                guider=guider,
-                num_steps=num_steps,
-                s_churn=0.0,
-                s_tmin=0.0,
-                s_tmax=999.0,
-                s_noise=1.0,
-                verbose=True,
-                device=device,
-            )
+        guider = guider_mapping[guider_type](*guider_args)
+        sampler = EulerEDMSampler(
+            abort_event=abort_event,
+            discretization=discretization,
+            guider=guider,
+            num_steps=num_steps,
+            s_churn=0.0,
+            s_tmin=0.0,
+            s_tmax=999.0,
+            s_noise=1.0,
+            verbose=True,
+            device=device,
+        )
         samplers.append(sampler)
     return samplers
 
 
 def get_value_dict(
     curr_imgs,
-    curr_imgs_clip,
     curr_input_frame_indices,
     curr_c2ws,
     curr_Ks,
@@ -1165,7 +1093,6 @@ def get_value_dict(
     H, W, T, F = curr_imgs.shape[-2], curr_imgs.shape[-1], len(curr_imgs), 8
 
     value_dict = {}
-    value_dict["cond_frames_without_noise"] = curr_imgs_clip[curr_input_frame_indices]
     value_dict["cond_frames"] = curr_imgs + 0.0 * torch.randn_like(curr_imgs)
     value_dict["cond_frames_mask"] = torch.zeros(T, dtype=torch.bool)
     value_dict["cond_frames_mask"][curr_input_frame_indices] = True
@@ -1351,7 +1278,7 @@ def run_one_scene(
 
     if isinstance(image_cond, str):
         image_cond = {"img": [image_cond]}
-    imgs_clip, imgs, img_size = [], [], None
+    imgs, img_size = [], None
     for i, (img, K) in enumerate(zip(image_cond["img"], camera_cond["K"])):
         if isinstance(img, str) or img is None:
             img, K = load_img_and_K(img or img_size, None, K=K, device="cpu")  # type: ignore
@@ -1400,7 +1327,6 @@ def run_one_scene(
             K[0] /= W
             K[1] /= H
             camera_cond["K"][i] = K
-            img_clip = img
         elif isinstance(img, np.ndarray):
             img_size = torch.Size(img.shape[:2])
             img = torch.as_tensor(img).permute(2, 0, 1)
@@ -1413,14 +1339,11 @@ def run_one_scene(
             K[0] /= W
             K[1] /= H
             camera_cond["K"][i] = K
-            img_clip = img
         else:
             assert (
                 False
             ), f"Variable `img` got {type(img)} type which is not supported!!!"
-        imgs_clip.append(img_clip)
         imgs.append(img)
-    imgs_clip = torch.cat(imgs_clip, dim=0)
     imgs = torch.cat(imgs, dim=0)
 
     if traj_prior_Ks is not None:
@@ -1444,7 +1367,6 @@ def run_one_scene(
             traj_prior_Ks[i] = prior_k
 
     options["num_frames"] = T
-    discretization = denoiser.discretization
     torch.cuda.empty_cache()
 
     seed_everything(seed)
@@ -1452,13 +1374,11 @@ def run_one_scene(
     # Get Data
     input_indices = image_cond["input_indices"]
     input_imgs = imgs[input_indices]
-    input_imgs_clip = imgs_clip[input_indices]
     input_c2ws = camera_cond["c2w"][input_indices]
     input_Ks = camera_cond["K"][input_indices]
 
     test_indices = [i for i in range(len(imgs)) if i not in input_indices]
     test_imgs = imgs[test_indices]
-    test_imgs_clip = imgs_clip[test_indices]
     test_c2ws = camera_cond["c2w"][test_indices]
     test_Ks = camera_cond["K"][test_indices]
 
@@ -1524,7 +1444,7 @@ def run_one_scene(
                 T=T,
                 padding_mode=options.get("t_padding_mode", "last"),
             )
-            curr_imgs, curr_imgs_clip, curr_c2ws, curr_Ks = [
+            curr_imgs, curr_c2ws, curr_Ks = [
                 assemble(
                     input=x[chunk_input_inds],
                     test=y[chunk_test_inds],
@@ -1542,24 +1462,14 @@ def run_one_scene(
                             ],
                             dim=0,
                         ),
-                        torch.cat(
-                            [
-                                input_imgs_clip,
-                                get_k_from_dict(all_samples, "samples-rgb").to(
-                                    input_imgs.device
-                                ),
-                            ],
-                            dim=0,
-                        ),
                         torch.cat([input_c2ws, test_c2ws[all_test_inds]], dim=0),
                         torch.cat([input_Ks, test_Ks[all_test_inds]], dim=0),
                     ],  # procedually append generated prior views to the input views
-                    [test_imgs, test_imgs_clip, test_c2ws, test_Ks],
+                    [test_imgs, test_c2ws, test_Ks],
                 )
             ]
             value_dict = get_value_dict(
                 curr_imgs.to("cuda"),
-                curr_imgs_clip.to("cuda"),
                 curr_input_sels
                 + [
                     sel
@@ -1585,7 +1495,7 @@ def run_one_scene(
             )
             samplers = create_samplers(
                 options["guider_types"],
-                discretization,
+                denoiser.discretization,
                 [len(curr_imgs)],
                 options["num_steps"],
                 options["cfg_min"],
@@ -1644,11 +1554,7 @@ def run_one_scene(
             traj_prior_Ks = test_Ks[:1].repeat_interleave(
                 traj_prior_c2ws.shape[0], dim=0
             )
-
         traj_prior_imgs = imgs.new_zeros(traj_prior_c2ws.shape[0], *imgs.shape[1:])
-        traj_prior_imgs_clip = imgs_clip.new_zeros(
-            traj_prior_c2ws.shape[0], *imgs_clip.shape[1:]
-        )
 
         # ---------------------------------- first pass ----------------------------------
         T_first_pass = T[0] if isinstance(T, (list, tuple)) else T
@@ -1708,7 +1614,7 @@ def run_one_scene(
                 T=T_first_pass,
                 padding_mode=options.get("t_padding_mode", "last"),
             )
-            curr_imgs, curr_imgs_clip, curr_c2ws, curr_Ks = [
+            curr_imgs, curr_c2ws, curr_Ks = [
                 assemble(
                     input=x[chunk_input_inds],
                     test=y[chunk_prior_inds],
@@ -1726,21 +1632,11 @@ def run_one_scene(
                             ],
                             dim=0,
                         ),
-                        torch.cat(
-                            [
-                                input_imgs_clip,
-                                get_k_from_dict(all_samples, "samples-rgb").to(
-                                    input_imgs.device
-                                ),
-                            ],
-                            dim=0,
-                        ),
                         torch.cat([input_c2ws, traj_prior_c2ws[all_prior_inds]], dim=0),
                         torch.cat([input_Ks, traj_prior_Ks[all_prior_inds]], dim=0),
                     ],  # procedually append generated prior views to the input views
                     [
                         traj_prior_imgs,
-                        traj_prior_imgs_clip,
                         traj_prior_c2ws,
                         traj_prior_Ks,
                     ],
@@ -1748,7 +1644,6 @@ def run_one_scene(
             ]
             value_dict = get_value_dict(
                 curr_imgs.to("cuda"),
-                curr_imgs_clip.to("cuda"),
                 curr_input_sels,
                 curr_c2ws,
                 curr_Ks,
@@ -1758,7 +1653,7 @@ def run_one_scene(
             )
             samplers = create_samplers(
                 options["guider_types"],
-                discretization,
+                denoiser.discretization,
                 [T_first_pass, T_second_pass],
                 options["num_steps"],
                 options["cfg_min"],
@@ -1820,13 +1715,6 @@ def run_one_scene(
         traj_prior_imgs = torch.cat(
             [input_imgs, get_k_from_dict(all_samples, "samples-rgb")], dim=0
         )[prior_argsort]
-        traj_prior_imgs_clip = torch.cat(
-            [
-                input_imgs_clip,
-                get_k_from_dict(all_samples, "samples-rgb"),
-            ],
-            dim=0,
-        )[prior_argsort]
         traj_prior_c2ws = torch.cat([input_c2ws, traj_prior_c2ws], dim=0)[prior_argsort]
         traj_prior_Ks = torch.cat([input_Ks, traj_prior_Ks], dim=0)[prior_argsort]
 
@@ -1887,7 +1775,7 @@ def run_one_scene(
                 T=T_second_pass,
                 padding_mode="last",
             )
-            curr_imgs, curr_imgs_clip, curr_c2ws, curr_Ks = [
+            curr_imgs, curr_c2ws, curr_Ks = [
                 assemble(
                     input=x[chunk_prior_inds],
                     test=y[chunk_test_inds],
@@ -1897,16 +1785,14 @@ def run_one_scene(
                 for x, y in zip(
                     [
                         traj_prior_imgs,
-                        traj_prior_imgs_clip,
                         traj_prior_c2ws,
                         traj_prior_Ks,
                     ],
-                    [test_imgs, test_imgs_clip, test_c2ws, test_Ks],
+                    [test_imgs, test_c2ws, test_Ks],
                 )
             ]
             value_dict = get_value_dict(
                 curr_imgs.to("cuda"),
-                curr_imgs_clip.to("cuda"),
                 curr_prior_sels,
                 curr_c2ws,
                 curr_Ks,

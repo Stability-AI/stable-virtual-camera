@@ -29,7 +29,7 @@ from seva.geometry import (
 from seva.model import SGMWrapper
 from seva.modules.autoencoder import AutoEncoder
 from seva.modules.conditioner import CLIPConditioner
-from seva.sampling import DDPMDiscretization, DiscreteDenoiser
+from seva.sampling import DiscreteDenoiser
 from seva.utils import load_model
 
 device = "cuda:0"
@@ -47,8 +47,7 @@ else:
 
 AE = AutoEncoder(chunk_size=1).to(device)
 CONDITIONER = CLIPConditioner().to(device)
-DISCRETIZATION = DDPMDiscretization()
-DENOISER = DiscreteDenoiser(discretization=DISCRETIZATION, num_idx=1000, device=device)
+DENOISER = DiscreteDenoiser(num_idx=1000, device=device)
 
 if COMPILE:
     CONDITIONER = torch.compile(CONDITIONER, dynamic=False)
@@ -273,6 +272,7 @@ def main(
     use_traj_prior=False,
     pretrained_model_name_or_path="stabilityai/stable-virtual-camera",
     weight_name="model.safetensors",
+    seed=23,
     **overwrite_options,
 ):
     MODEL = SGMWrapper(
@@ -306,8 +306,6 @@ def main(
             "cfg_min": 1.2,
             "encoding_t": 1,
             "decoding_t": 1,
-            "num_inputs": None,
-            "seed": 23,
         },
     }
 
@@ -323,8 +321,8 @@ def main(
             item for item in glob.glob(osp.join(data_path, "*")) if os.path.isfile(item)
         ]
 
-    num_inputs = options["num_inputs"]
     for scene in tqdm(scenes):
+        num_inputs = options.get("num_inputs", None)
         save_path_scene = os.path.join(
             WORK_DIR, task, save_subdir, os.path.splitext(os.path.basename(scene))[0]
         )
@@ -379,7 +377,7 @@ def main(
             use_traj_prior=use_traj_prior,
             traj_prior_Ks=anchor_Ks,
             traj_prior_c2ws=anchor_c2ws,
-            seed=options["seed"],
+            seed=seed,
         )
         for _ in video_path_generator:
             pass

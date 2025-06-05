@@ -1,6 +1,8 @@
+import threading
 import numpy as np
 import torch
 import torch.nn as nn
+import gradio as gr
 from einops import rearrange
 from tqdm import tqdm
 
@@ -43,29 +45,38 @@ def generate_roughly_equally_spaced_steps(
     return np.linspace(max_step - 1, 0, num_substeps, endpoint=False).astype(int)[::-1]
 
 
-class EpsScaling(object):
+#######################################################
+# Discretization
+#######################################################
+
+
+class Discretization(object):
+    def __init__(self, num_timesteps: int = 1000):
+        self.num_timesteps = num_timesteps
+
     def __call__(
-        self, sigma: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        c_skip = torch.ones_like(sigma, device=sigma.device)
-        c_out = -sigma
-        c_in = 1 / (sigma**2 + 1.0) ** 0.5
-        c_noise = sigma.clone()
-        return c_skip, c_out, c_in, c_noise
+        self,
+        n: int,
+        do_append_zero: bool = True,
+        flip: bool = False,
+        device: str | torch.device = "cpu",
+    ) -> torch.Tensor:
+        sigmas = self.get_sigmas(n, device=device)
+        sigmas = append_zero(sigmas) if do_append_zero else sigmas
+        return sigmas if not flip else torch.flip(sigmas, (0,))
 
 
-class DDPMDiscretization(object):
+class DDPMDiscretization(Discretization):
     def __init__(
         self,
         linear_start: float = 5e-06,
         linear_end: float = 0.012,
-        num_timesteps: int = 1000,
         log_snr_shift: float | None = 2.4,
+        **kwargs,
     ):
-        self.num_timesteps = num_timesteps
-
+        super().__init__(**kwargs)
         betas = make_betas(
-            num_timesteps,
+            self.num_timesteps,
             linear_start=linear_start,
             linear_end=linear_end,
         )
@@ -90,33 +101,33 @@ class DDPMDiscretization(object):
             torch.tensor(sigmas, dtype=torch.float32, device=device), (0,)
         )
 
-    def __call__(
-        self,
-        n: int,
-        do_append_zero: bool = True,
-        flip: bool = False,
-        device: str | torch.device = "cpu",
-    ) -> torch.Tensor:
-        sigmas = self.get_sigmas(n, device=device)
-        sigmas = append_zero(sigmas) if do_append_zero else sigmas
-        return sigmas if not flip else torch.flip(sigmas, (0,))
+
+#######################################################
+# Denoiser
+#######################################################
 
 
 class DiscreteDenoiser(object):
+    discretization: Discretization = DDPMDiscretization()
     sigmas: torch.Tensor
 
     def __init__(
         self,
-        discretization: DDPMDiscretization,
         num_idx: int = 1000,
         device: str | torch.device = "cpu",
     ):
-        self.scaling = EpsScaling()
-        self.discretization = discretization
         self.num_idx = num_idx
         self.device = device
-
         self.register_sigmas()
+
+    def scaling(
+        self, sigma: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        c_skip = torch.ones_like(sigma, device=sigma.device)
+        c_out = -sigma
+        c_in = 1 / (sigma**2 + 1.0) ** 0.5
+        c_noise = sigma.clone()
+        return c_skip, c_out, c_in, c_noise
 
     def register_sigmas(self):
         self.sigmas = self.discretization(
@@ -152,9 +163,9 @@ class DiscreteDenoiser(object):
         )
 
 
-class ConstantScaleRule(object):
-    def __call__(self, scale: float | torch.Tensor) -> float | torch.Tensor:
-        return scale
+#######################################################
+# Scale rules and schedules
+#######################################################
 
 
 class MultiviewScaleRule(object):
@@ -187,8 +198,11 @@ class MultiviewScaleRule(object):
         return scale
 
 
-class ConstantScaleSchedule(object):
-    def __call__(
+class VanillaCFG(object):
+    def __init__(self):
+        self.scale_rule = lambda scale: scale
+
+    def _expand_scale(
         self, sigma: float | torch.Tensor, scale: float | torch.Tensor
     ) -> float | torch.Tensor:
         if isinstance(sigma, float):
@@ -200,9 +214,7 @@ class ConstantScaleSchedule(object):
         else:
             raise ValueError(f"Invalid sigma type {type(sigma)}.")
 
-
-class ConstantGuidance(object):
-    def __call__(
+    def guidance(
         self,
         uncond: torch.Tensor,
         cond: torch.Tensor,
@@ -212,20 +224,12 @@ class ConstantGuidance(object):
             scale = append_dims(scale, cond.ndim)
         return uncond + scale * (cond - uncond)
 
-
-class VanillaCFG(object):
-    def __init__(self):
-        self.scale_rule = ConstantScaleRule()
-        self.scale_schedule = ConstantScaleSchedule()
-        self.guidance = ConstantGuidance()
-
     def __call__(
         self, x: torch.Tensor, sigma: float | torch.Tensor, scale: float | torch.Tensor
     ) -> torch.Tensor:
         x_u, x_c = x.chunk(2)
         scale = self.scale_rule(scale)
-        scale_value = self.scale_schedule(sigma, scale)
-        x_pred = self.guidance(x_u, x_c, scale_value)
+        x_pred = self.guidance(x_u, x_c, self._expand_scale(sigma, scale))
         return x_pred
 
     def prepare_inputs(
@@ -246,8 +250,6 @@ class MultiviewCFG(VanillaCFG):
     def __init__(self, cfg_min: float = 1.0):
         self.scale_min = cfg_min
         self.scale_rule = MultiviewScaleRule(min_scale=cfg_min)
-        self.scale_schedule = ConstantScaleSchedule()
-        self.guidance = ConstantGuidance()
 
     def __call__(  # type: ignore
         self,
@@ -260,15 +262,13 @@ class MultiviewCFG(VanillaCFG):
     ) -> torch.Tensor:
         x_u, x_c = x.chunk(2)
         scale = self.scale_rule(scale, c2w, K, input_frame_mask)
-        scale_value = self.scale_schedule(sigma, scale)
-        x_pred = self.guidance(x_u, x_c, scale_value)
+        x_pred = self.guidance(x_u, x_c, self._expand_scale(sigma, scale))
         return x_pred
 
 
 class MultiviewTemporalCFG(MultiviewCFG):
     def __init__(self, num_frames: int, cfg_min: float = 1.0):
         super().__init__(cfg_min=cfg_min)
-
         self.num_frames = num_frames
         distance_matrix = (
             torch.arange(num_frames)[None] - torch.arange(num_frames)[:, None]
@@ -298,10 +298,28 @@ class MultiviewTemporalCFG(MultiviewCFG):
         return super().__call__(x, sigma, scale, c2w, K, input_frame_mask.flatten(0, 1))
 
 
-class EulerEDMSampler(object):
+#######################################################
+# Samplers
+#######################################################
+
+
+class GradioTrackedSampler(object):
+    def __init__(self, *args, abort_event: threading.Event | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.abort_event = abort_event
+
+    def possibly_update_pbar(self, global_pbar: gr.Progress | None):
+        if global_pbar is not None:
+            global_pbar.update()
+        if self.abort_event is not None and self.abort_event.is_set():
+            return False
+        return True
+
+
+class EulerEDMSampler(GradioTrackedSampler):
     def __init__(
         self,
-        discretization: DDPMDiscretization,
+        discretization: Discretization,
         guider: VanillaCFG | MultiviewCFG | MultiviewTemporalCFG,
         num_steps: int | None = None,
         verbose: bool = False,
@@ -310,7 +328,9 @@ class EulerEDMSampler(object):
         s_tmin=0.0,
         s_tmax=float("inf"),
         s_noise=1.0,
+        **kwargs,
     ):
+        super().__init__(**kwargs)
         self.num_steps = num_steps
         self.discretization = discretization
         self.guider = guider
@@ -376,6 +396,7 @@ class EulerEDMSampler(object):
         uc: dict | None = None,
         num_steps: int | None = None,
         verbose: bool = True,
+        global_pbar: gr.Progress | None = None,
         **guider_kwargs,
     ) -> torch.Tensor:
         uc = cond if uc is None else uc
@@ -402,4 +423,6 @@ class EulerEDMSampler(object):
                 gamma,
                 **guider_kwargs,
             )
+            if not self.possibly_update_pbar(global_pbar):
+                return None
         return x

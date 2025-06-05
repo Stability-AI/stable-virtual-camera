@@ -44,7 +44,7 @@ from seva.model import SGMWrapper
 from seva.modules.autoencoder import AutoEncoder
 from seva.modules.conditioner import CLIPConditioner
 from seva.modules.preprocessor import Dust3rPipeline
-from seva.sampling import DDPMDiscretization, DiscreteDenoiser
+from seva.sampling import DiscreteDenoiser
 from seva.utils import load_model
 
 device = "cuda:0"
@@ -109,8 +109,7 @@ DUST3R = Dust3rPipeline(device=device)  # type: ignore
 MODEL = SGMWrapper(load_model(device="cpu", verbose=True).eval()).to(device)
 AE = AutoEncoder(chunk_size=1).to(device)
 CONDITIONER = CLIPConditioner().to(device)
-DISCRETIZATION = DDPMDiscretization()
-DENOISER = DiscreteDenoiser(discretization=DISCRETIZATION, num_idx=1000, device=device)
+DENOISER = DiscreteDenoiser(num_idx=1000, device=device)
 VERSION_DICT = {
     "H": 576,
     "W": 576,
