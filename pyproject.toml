@@ -24,6 +24,7 @@ dependencies = [
     "imageio[ffmpeg]",
     "huggingface-hub",
     "opencv-python",
+    "pydantic==2.10.6",
 ]
 
 [project.optional-dependencies]
